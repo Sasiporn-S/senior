@@ -1,0 +1,118 @@
+import random
+import string
+from flask import Flask, flash, redirect, render_template, request, url_for
+from flask import send_file
+import pandas as pd
+import numpy as np
+
+# initial
+#df_secret = pd.DataFrame(columns=['student_id','secret_key','rand_list'])
+#df_secret.to_csv('Data/secret_key.csv',index = None)
+
+df_ans = pd.read_csv('Data/answer.csv')
+
+#df_user_ans=pd.DataFrame(columns=['secret_key','answer'])
+#df_user_ans.to_csv('Data/user_answer.csv',index = None)
+
+df_user_ans = pd.read_csv('Data/user_answer.csv')
+df_secret = pd.read_csv('Data/secret_key.csv')
+
+def get_random_string():
+    global df_secret
+    # Random string with the combination of lower and upper case
+    letters = string.ascii_letters
+    while True:
+        result_str = ''.join(random.choice(letters) for i in range(10))
+        if result_str not in  list(df_secret['secret_key']):
+            break
+    return result_str
+def check_student_id(x):
+    if len(x) != 10:
+        return False
+    for i in x :
+        if i not in '0123456789':
+            return False
+    return True
+
+app = Flask(__name__,template_folder='template')
+@app.route('/id/<secret_key>', methods = ['GET', 'POST']) #เรียกwebserviceมาที่path'/id/secret_key'
+def index(secret_key): #route request เข้ามาที่function index()
+    global df_secret,glob_err #สร้างตัวแปรที่นำไปใช้งานนอกฟังก์ชันได้โดยไม่ต้องใช้return
+    #################################
+    df_user_ans = pd.read_csv('Data/user_answer.csv')
+    #################################
+    if secret_key in list(df_user_ans['secret_key']): #ถ้าซำ้จะกลับไปใช้งานอีกไม่ได้ถ้าทำเสร็จแล้ว
+        return redirect(url_for("home")) #กลับไปหน้าhome
+    elif secret_key not in list(df_secret['secret_key']):
+        return redirect(url_for("home")) #กลับไปหน้าhome
+    if request.method == 'POST':
+        x = (request.form['secret_key'],request.form['answer'])
+        df_user_ans = df_user_ans.append(pd.DataFrame([x],columns = ['secret_key','answer']),ignore_index=True)
+        #################################
+        df_user_ans.to_csv('Data/user_answer.csv',index = None)
+        #################################
+        return 'Thank you'
+    df_personal = df_secret[df_secret['secret_key']==secret_key]
+    img_idx = [int(i) for i in list(df_personal['rand_list'])[0].split()]
+    return render_template('index.html', name = list(df_personal['student_id'])[0],img_path = " ".join([df_ans['filename'][i] for i in img_idx]),secret_key = secret_key)
+@app.route('/', methods = ['GET', 'POST']) #เรียกwebserviceมาที่path'/'
+def home(): #route request เข้ามาที่function home()
+    global df_secret,df_personal #สร้างตัวแปรที่นำไปใช้งานนอกฟังก์ชันได้โดยไม่ต้องใช้return
+    error=None #ไม่มีerrorเพื่อให้ไม่ไปหน้าindex
+    if request.method == 'POST':    
+        #################################
+        df_secret = pd.read_csv('Data/secret_key.csv')
+        #################################
+        if request.form['username'] == '': #ไม่ได้รับค่าในช่องusername
+            error = 'กรุณาใส่รหัสนิสิตเพื่อทำการเข้าสู่ระบบ' #ส่งข้อความเพื่อให้ใส่ค่าใหม่
+        elif not check_student_id(request.form['username']): #checkว่าเป็นintกับครบ10หลักหรือไม่
+            error = 'กรุณาใส่รหัสนิสิตให้ถูกต้องค่ะ'
+        elif request.form['username'] not in list(df_secret['student_id']): #ถ้าค่าที่รับมาไม่อยู่ในlistที่เคยเก็บไว้
+            secret = get_random_string() #สุ่มค่าsecretkeyให้
+            new_list = [i for i in range(df_ans.shape[0])][:] #ตรวจสอบว่ามีทั้งหมดกี่ข้อโดยนับจากแถวของข้อในไฟล์ansเพราะshape[0]จะแสดงจำนวนของแถวในไฟล์
+            random.shuffle(new_list) #สุ่มข้อ
+            df_secret = df_secret.append(pd.DataFrame([[request.form['username'],secret,' '.join([str(i) for i in new_list])]],columns=['student_id','secret_key','rand_list']),ignore_index=True)
+            #สร้างdataframeที่มีข้อมูล3อย่าง
+            #################################
+            df_secret.to_csv('Data/secret_key.csv',index = None)
+            #################################
+            #export pandas dataframe to CSV file
+            return redirect(url_for("index",secret_key = secret)) #ไปที่หน้าindexโดยให้ค่าsecret_key = secret
+        else: #ค่าที่รับมาอยู่ในlistที่เคยเก็บไว้
+            return redirect(url_for("index",secret_key = list(df_secret['secret_key'][df_secret['student_id']==request.form['username']])[0])) #ให้ไปที่หน้าindexโดยดึงข้อมูลsecret_keyจากไฟล์csv
+    return render_template('home.html', error = error)
+@app.route('/download/<filename>')
+def downloadFile(filename):
+    #For windows you need to use drive name [ex: F:/Example.pdf]
+    f= open('Data/'+filename,'r').read()
+    return f #send_file(path, as_attachment=True)
+if __name__ == '__main__':
+    app.run(debug = False)
+    
+def check_ans(ip_address):
+    df_user_ans = pd.read_csv(ip_address+':5050/download/user_answer.csv')
+    df_secret = pd.read_csv(ip_address+':5050/download/secret_key.csv')
+    df = pd.merge(df_secret, df_user_ans, how='inner',on='secret_key')
+    l = []
+    for i in range(df.shape[0]):
+        S_per = df.T[i]
+        ans = [int(j) for j in S_per['answer'].split()]
+        seq = [int(j) for j in S_per['rand_list'].split()]
+        sort_list = sorted([(seq[j],ans[j]) for j in range(len(ans))])
+        sort_ans = " ".join([str(j[1]) for j in sort_list])
+        l+= [sort_ans]
+    df = df[['student_id','secret_key']]
+    df['Sort_answer'] = l
+    score = []
+    for i in df['Sort_answer']:
+        ans = np.array([int(j) for j in i.split()])
+        score += [sum((ans == np.array(df_ans['answer'])).astype('int'))/len(ans)]
+    df['Score'] = score
+    score = []
+    for i in df['Sort_answer']:
+        ans = np.array([int(j) for j in i.split()])
+        score += [(ans == np.array(df_ans['answer'])).astype('int')]
+    df['Score1'] = score
+    return df
+ip_address = "http://35.197.133.119"
+check_ans(ip_address)
